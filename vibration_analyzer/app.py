@@ -32,12 +32,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Slot
 import pyqtgraph as pg
 
-# Configure OpenGL Acceleration & Antialiasing in PyQtGraph
+# Configure PyQtGraph Performance Options
 try:
-    pg.setConfigOptions(useOpenGL=True, antialias=True, background="#0f1117", foreground="#94a3b8")
+    pg.setConfigOptions(useOpenGL=False, antialias=False, background="#0f1117", foreground="#94a3b8")
 except Exception as e:
-    # Safe fallback if OpenGL context is constrained
-    pg.setConfigOptions(useOpenGL=False, antialias=True, background="#0f1117", foreground="#94a3b8")
+    pass
 
 # Support both relative package import and standalone execution
 try:
@@ -250,7 +249,13 @@ class VibrationWorkstationWindow(QtWidgets.QMainWindow):
 
         # DSP Worker QThread (Asynchronous processing at 60 Hz)
         self.dsp_worker = DSPWorkerThread(self.audio_engine)
-        self.dsp_worker.processed_frame_ready.connect(self._on_processed_frame_ready)
+
+        # High-Responsiveness GUI Pacing Engine (prevents Qt event queue backlog)
+        self._last_rendered_timestamp = 0.0
+        self._is_rendering_frame = False
+        self._render_timer = QtCore.QTimer(self)
+        self._render_timer.setInterval(28)  # ~35 FPS paced rendering for 100% responsive UI
+        self._render_timer.timeout.connect(self._on_render_tick)
 
         # Session Flight Recorder State
         self._is_recording_flight = False
@@ -264,6 +269,7 @@ class VibrationWorkstationWindow(QtWidgets.QMainWindow):
         self._init_menu_bar()
 
         # Start acquisition & DSP worker thread
+        self._render_timer.start()
         self.audio_engine.start(use_synthetic=False)
         self.dsp_worker.start()
 
@@ -710,6 +716,21 @@ class VibrationWorkstationWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"FLIGHT RECORDING SAVED: {wav_path} | {csv_path}", 10000)
             logger.info(f"Flight recording saved: WAV={wav_path}, CSV={csv_path}")
 
+    def _on_render_tick(self):
+        """Paced rendering tick triggered on GUI thread."""
+        if self._is_rendering_frame:
+            return
+        payload = self.dsp_worker.get_latest_payload()
+        if payload is not None and payload.timestamp > self._last_rendered_timestamp:
+            self._last_rendered_timestamp = payload.timestamp
+            self._is_rendering_frame = True
+            try:
+                self.dsp_worker._gui_busy = True
+                self._on_processed_frame_ready(payload)
+            finally:
+                self.dsp_worker._gui_busy = False
+                self._is_rendering_frame = False
+
     @Slot(object)
     def _on_processed_frame_ready(self, payload: DSPFramePayload):
         """
@@ -774,6 +795,8 @@ class VibrationWorkstationWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event: QtGui.QCloseEvent):
         """Clean shutdown."""
         logger.info("Initiating graceful shutdown...")
+        if hasattr(self, "_render_timer"):
+            self._render_timer.stop()
         self.dsp_worker.stop_worker()
         if not self.dsp_worker.wait(1500):
             self.dsp_worker.terminate()

@@ -96,15 +96,23 @@ class HUDCard(QtWidgets.QFrame):
         self.lbl_subtext = QtWidgets.QLabel("Nominal")
         self.lbl_subtext.setStyleSheet("color: #475569; font-size: 9px;")
 
+        self._current_val = default_val
+        self._current_color = None
+        self._current_subtext = "Nominal"
+
         layout.addWidget(self.lbl_title)
         layout.addLayout(h_val)
         layout.addWidget(self.lbl_subtext)
 
     def update_val(self, val_str: str, color: Optional[str] = None, subtext: Optional[str] = None):
-        self.lbl_value.setText(val_str)
-        if color:
+        if val_str != self._current_val:
+            self._current_val = val_str
+            self.lbl_value.setText(val_str)
+        if color and color != self._current_color:
+            self._current_color = color
             self.lbl_value.setStyleSheet(f"color: {color}; font-size: 18px; font-weight: 900; font-family: monospace;")
-        if subtext:
+        if subtext and subtext != self._current_subtext:
+            self._current_subtext = subtext
             self.lbl_subtext.setText(subtext)
 
 
@@ -264,11 +272,9 @@ class NarrowbandSpectrumDock(ModernDockWidget):
             name="Peak Hold",
         )
 
-        # 3. Live Real-Time Spectrum (Cyber Cyan filled)
+        # 3. Live Real-Time Spectrum (Cyber Cyan)
         self.curve_live = self.plot_widget.plot(
-            pen=pg.mkPen(color=CYBER_CYAN, width=1.8),
-            fillLevel=0.0,
-            brush=(0, 240, 255, 35),
+            pen=pg.mkPen(color=CYBER_CYAN, width=1.5),
             name="Live Spectrum",
         )
 
@@ -373,7 +379,9 @@ class NarrowbandSpectrumDock(ModernDockWidget):
 
         if not self._use_db:
             max_y = max(self.alarm_threshold * 1.3, float(np.max(y_data)) * 1.25, 0.2)
-            self.plot_widget.setYRange(0.0, max_y)
+            if abs(max_y - getattr(self, "_current_max_y", 0.0)) > 0.15 * max(max_y, 0.2):
+                self._current_max_y = max_y
+                self.plot_widget.setYRange(0.0, max_y)
 
         # Position 1X-10X harmonic cursors
         f0 = p.dominant_frequency_hz
@@ -440,10 +448,11 @@ class Spectrogram2DDock(ModernDockWidget):
             self._spectrogram_matrix[:len(db_slice), -1] = db_slice
 
             self.img_item.setImage(self._spectrogram_matrix, autoLevels=False, levels=[-65.0, 5.0])
-            if len(freq_slice) > 0:
+            if not getattr(self, "_ranges_set", False) and len(freq_slice) > 0:
                 self.img_item.setRect(QtCore.QRectF(0, 0, float(freq_slice[-1]), float(self.history_len)))
                 self.plot_widget.setXRange(0, float(freq_slice[-1]), padding=0.0)
                 self.plot_widget.setYRange(0, self.history_len, padding=0.0)
+                self._ranges_set = True
         except Exception as e:
             logger.debug(f"2D Spectrogram update exception: {e}")
 
@@ -460,6 +469,7 @@ class Cascade3DDock(ModernDockWidget):
 
     def __init__(self, parent=None):
         super().__init__("Panel D: 3D Spectral Cascade Plot (OpenGL)", parent)
+        self._frame_counter = 0
 
         self.gl_view = gl.GLViewWidget()
         self.gl_view.setBackgroundColor("#0c0f17")
@@ -492,7 +502,11 @@ class Cascade3DDock(ModernDockWidget):
 
     def update_data(self, p: DSPFramePayload):
         try:
-            # Downsample frequency bins for smooth 60 FPS 3D mesh rendering
+            self._frame_counter += 1
+            if self._frame_counter % 2 != 0:
+                return  # Smooth ~20 FPS 3D rendering pace
+
+            # Downsample frequency bins for smooth 3D mesh rendering
             amps = p.amp_spectrum
             if len(amps) == 0:
                 return

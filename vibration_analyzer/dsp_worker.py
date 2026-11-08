@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -256,6 +257,16 @@ class DSPWorkerThread(QThread):
         self.mahalanobis_threshold_99 = 5.5
         self.isolation_forest: Optional[IsolationForest] = None
         self.scaler: Optional[StandardScaler] = None
+
+        # Thread-safe latest payload buffer for non-blocking GUI polling
+        self._latest_payload: Optional[DSPFramePayload] = None
+        self._payload_lock = threading.Lock()
+        self._gui_busy = False
+
+    def get_latest_payload(self) -> Optional[DSPFramePayload]:
+        """Thread-safe retrieval of the freshest diagnostic frame."""
+        with self._payload_lock:
+            return self._latest_payload
 
     def update_dsp_params(
         self,
@@ -628,7 +639,11 @@ class DSPWorkerThread(QThread):
                 is_calibrating=self._is_calibrating,
             )
 
-            self.processed_frame_ready.emit(payload)
+            with self._payload_lock:
+                self._latest_payload = payload
+
+            if not self._gui_busy:
+                self.processed_frame_ready.emit(payload)
 
             # Sleep remainder of frame to maintain ~60 FPS
             elapsed_loop = time.perf_counter() - t0
