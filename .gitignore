@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing & Linting
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Recordings & Telemetry Logs
+vibration_analyzer/flight_recordings/
+flight_recordings/
+
+# OS specific
+.DS_Store
+Thumbs.db
